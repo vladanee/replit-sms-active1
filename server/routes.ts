@@ -2,25 +2,20 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { sendSmsSchema } from "@shared/schema";
-import axios from "axios";
-
-const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_KEY = process.env.TWILIO_API_KEY;
-const TWILIO_SECRET = process.env.TWILIO_API_SECRET;
-const TWILIO_PHONE = process.env.TWILIO_PHONE;
+import { getTwilioClient, getTwilioFromPhoneNumber, getTwilioStatus } from "./twilio";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   
-  app.get("/api/config/status", (_req, res) => {
-    const configured = !!(TWILIO_SID && TWILIO_KEY && TWILIO_SECRET && TWILIO_PHONE);
-    res.json({
-      configured,
-      accountSid: TWILIO_SID ? `${TWILIO_SID.slice(0, 6)}...` : undefined,
-      phoneNumber: TWILIO_PHONE,
-    });
+  app.get("/api/config/status", async (_req, res) => {
+    try {
+      const status = await getTwilioStatus();
+      res.json(status);
+    } catch (error) {
+      res.json({ configured: false });
+    }
   });
 
   app.get("/api/messages", async (_req, res) => {
@@ -45,51 +40,43 @@ export async function registerRoutes(
 
     const { to, body } = result.data;
 
-    if (!TWILIO_SID || !TWILIO_KEY || !TWILIO_SECRET || !TWILIO_PHONE) {
-      await storage.addMessage({
-        to,
-        body,
-        status: "failed",
-        error: "Twilio credentials not configured",
-      });
-      return res.status(503).json({
-        success: false,
-        error: "Twilio credentials not configured. Please set TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, and TWILIO_PHONE environment variables.",
-      });
-    }
-
     try {
-      const params = new URLSearchParams();
-      params.append("To", to);
-      params.append("From", TWILIO_PHONE);
-      params.append("Body", body);
+      const client = await getTwilioClient();
+      const fromNumber = await getTwilioFromPhoneNumber();
 
-      const response = await axios.post(
-        `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`,
-        params,
-        {
-          auth: {
-            username: TWILIO_KEY,
-            password: TWILIO_SECRET,
-          },
-        }
-      );
+      if (!fromNumber) {
+        await storage.addMessage({
+          to,
+          body,
+          status: "failed",
+          error: "Twilio phone number not configured",
+        });
+        return res.status(503).json({
+          success: false,
+          error: "Twilio phone number not configured. Please set up a phone number in your Twilio connection.",
+        });
+      }
+
+      const message = await client.messages.create({
+        to,
+        from: fromNumber,
+        body,
+      });
 
       await storage.addMessage({
         to,
         body,
         status: "sent",
-        sid: response.data.sid,
+        sid: message.sid,
       });
 
-      res.json({ success: true, sid: response.data.sid });
+      res.json({ success: true, sid: message.sid });
     } catch (error: any) {
-      console.error("Twilio Error:", error.response?.data || error.message);
+      console.error("Twilio Error:", error.message || error);
       
-      const twilioError = error.response?.data;
-      const statusCode = error.response?.status || 500;
-      const errorMessage = twilioError?.message || error.message || "Failed to send SMS";
-      const errorCode = twilioError?.code;
+      const errorMessage = error.message || "Failed to send SMS";
+      const errorCode = error.code;
+      const statusCode = error.status || 500;
       
       await storage.addMessage({
         to,
@@ -98,7 +85,14 @@ export async function registerRoutes(
         error: errorCode ? `[${errorCode}] ${errorMessage}` : errorMessage,
       });
 
-      if (statusCode === 401) {
+      if (errorMessage.includes("not connected") || errorMessage.includes("X_REPLIT_TOKEN")) {
+        return res.status(503).json({
+          success: false,
+          error: "Twilio is not configured. Please set up the Twilio connection.",
+        });
+      }
+
+      if (statusCode === 401 || errorCode === 20003) {
         return res.status(401).json({ 
           success: false, 
           error: "Invalid Twilio credentials",
