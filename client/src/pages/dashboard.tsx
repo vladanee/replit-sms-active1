@@ -186,7 +186,7 @@ function ApiTestingCard() {
   const sendMutation = useMutation({
     mutationFn: async (data: SendSmsRequest) => {
       const response = await apiRequest("POST", "/api/send-sms", data);
-      return response as SmsResponse;
+      return await response.json() as SmsResponse;
     },
     onSuccess: (data) => {
       if (data.success) {
