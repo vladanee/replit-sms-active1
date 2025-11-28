@@ -1,37 +1,32 @@
-import { type User, type InsertUser } from "@shared/schema";
 import { randomUUID } from "crypto";
-
-// modify the interface with any CRUD methods
-// you might need
+import type { SmsMessage } from "@shared/schema";
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  addMessage(message: Omit<SmsMessage, "id" | "timestamp">): Promise<SmsMessage>;
+  getMessages(): Promise<SmsMessage[]>;
 }
 
 export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+  private messages: Map<string, SmsMessage>;
 
   constructor() {
-    this.users = new Map();
+    this.messages = new Map();
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
+  async addMessage(message: Omit<SmsMessage, "id" | "timestamp">): Promise<SmsMessage> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+    const smsMessage: SmsMessage = {
+      ...message,
+      id,
+      timestamp: new Date(),
+    };
+    this.messages.set(id, smsMessage);
+    return smsMessage;
+  }
+
+  async getMessages(): Promise<SmsMessage[]> {
+    return Array.from(this.messages.values())
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }
 }
 
